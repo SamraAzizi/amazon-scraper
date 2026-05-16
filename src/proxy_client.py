@@ -42,3 +42,17 @@ class ThordataProxyClient:
             "http": proxy_url,
             "https": proxy_url
         }
+
+    def get(self, url: str, country: Optional[str] = None, session_id: Optional[str] = None, **kwargs) -> requests.Response:
+        proxies = self._get_proxy_url(country, session_id)
+        headers = kwargs.pop("headers", {})
+        headers.setdefault("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        
+        return requests.get(url, proxies=proxies, headers=headers, timeout=30, **kwargs)
+
+    def post(self, url: str, country: Optional[str] = None, session_id: Optional[str] = None, **kwargs) -> requests.Response:
+        proxies = self._get_proxy_url(country, session_id)
+        headers = kwargs.pop("headers", {})
+        headers.setdefault("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        
+        return requests.post(url, proxies=proxies, headers=headers, timeout=30, **kwargs)
