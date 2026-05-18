@@ -33,3 +33,30 @@ def get_price_history(asin: str, limit: int = 100):
 def search_products(criteria: Dict[str, Any]):
     db = SyncDatabase()
     return db.search_products(criteria)
+
+
+@tool
+def vector_search(query: str, top_k: int = 10):
+    try:
+        embeddings = get_embeddings()
+        vector_store = QdrantStore()
+        
+        query_vector = embeddings.embed_query(query)
+        results = vector_store.search(query_vector, top_k)
+        
+        if not results.get("products") and not results.get("contexts"):
+            return {
+                "products": [],
+                "contexts": [],
+                "sources": [],
+                "message": f"No products found matching: {query}"
+            }
+        
+        return results
+    except Exception as e:
+        return {
+            "products": [],
+            "contexts": [],
+            "sources": [],
+            "error": f"Vector search failed: {str(e)}"
+        }
