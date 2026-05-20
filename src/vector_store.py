@@ -39,3 +39,44 @@ class QdrantStore:
             "limit": top_k,
             "with_payload": True,
         }
+        
+        if filter_dict:
+            query_params["query_filter"] = filter_dict
+        
+        results = self.client.query_points(**query_params)
+        hits = results.points
+        
+        contexts = []
+        sources = []
+        products = []
+        
+        for hit in hits:
+            payload = getattr(hit, "payload", None) or {}
+            text = payload.get("text", "")
+            asin = payload.get("asin", "")
+            score = getattr(hit, "score", 0)
+            
+            if text and asin:
+                contexts.append(text)
+                sources.append(asin)
+                products.append({
+                    "asin": asin,
+                    "title": payload.get("title", ""),
+                    "brand": payload.get("brand", ""),
+                    "price": payload.get("price"),
+                    "price_display": payload.get("price_display", ""),
+                    "currency": payload.get("currency", ""),
+                    "currency_symbol": payload.get("currency_symbol", ""),
+                    "rating": payload.get("rating"),
+                    "geo_location": payload.get("geo_location", ""),
+                    "amazon_domain": payload.get("amazon_domain", ""),
+                    "url": payload.get("url", ""),
+                    "scraped_url": payload.get("scraped_url", ""),
+                    "score": score
+                })
+        
+        return {
+            "contexts": contexts,
+            "sources": sources,
+            "products": products
+        }
