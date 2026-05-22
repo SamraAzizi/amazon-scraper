@@ -64,3 +64,46 @@ Domain: amazon.{amazon_domain}
 Categories: {categories_text}
 Description: {overview_text}
 """.strip()
+            
+            vector_id = f"{asin}_{geo_location}"
+            vector = embeddings.embed_query(text_content)
+            
+            vector_store.upsert(
+                ids=[vector_id],
+                vectors=[vector],
+                payloads=[{
+                    "asin": asin,
+                    "geo_location": geo_location,
+                    "text": text_content,
+                    "title": title,
+                    "brand": brand,
+                    "price": price,
+                    "price_display": price_display,
+                    "currency": currency,
+                    "currency_symbol": currency_symbol,
+                    "rating": rating,
+                    "categories": categories,
+                    "amazon_domain": amazon_domain,
+                    "url": product_data.get("url"),
+                    "scraped_url": product_data.get("scraped_url")
+                }]
+            )
+            return product_data
+        
+        product_data = await ctx.step.run("scrape", lambda: _scrape())
+        
+        if product_data.get("skipped"):
+            return {"asin": asin, "status": "skipped", "reason": product_data.get("reason")}
+        
+        stored = await _store(product_data)
+        
+        if stored.get("skipped"):
+            return {"asin": asin, "status": "skipped", "reason": stored.get("reason")}
+        
+        if stored.get("title") or (stored.get("price") and stored.get("brand")):
+            embedded = await ctx.step.run("embed", lambda: _embed(stored))
+            return {"asin": asin, "status": "completed", "product": embedded}
+        else:
+            return {"asin": asin, "status": "skipped", "reason": "Product missing required fields for embedding"}
+    
+    return scrape_product_function
