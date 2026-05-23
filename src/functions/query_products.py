@@ -88,3 +88,57 @@ def create_query_products_function(inngest_client):
                 additional_context += history_context
         else:
             additional_context = ""
+        
+        user_content = (
+            "You are an Amazon Price Agent. Use the following product information to answer the user's question.\n\n"
+            f"Product Information:\n{context_block}\n"
+            f"{additional_context}\n\n"
+            f"User Question: {question}\n\n"
+            "Provide a comprehensive answer with specific details about products, prices across countries, ratings, and availability. "
+            "Include ASINs, prices with currency symbols, and links to Amazon pages when available."
+        )
+        
+        def _call_openai(user_content: str):
+            openai_api_key = os.getenv("OPENAI_API_KEY")
+            if not openai_api_key:
+                raise ValueError("OPENAI_API_KEY environment variable is not set. Please check your .env file.")
+            
+            if not openai_api_key.startswith("sk-"):
+                raise ValueError(f"OPENAI_API_KEY appears to be invalid (should start with 'sk-'). Got: {openai_api_key[:10]}...")
+            
+            model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            
+            try:
+                client = OpenAI(api_key=openai_api_key)
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful Amazon Price Agent that provides detailed product information, price comparisons across countries, and analysis."},
+                        {"role": "user", "content": user_content}
+                    ],
+                    max_tokens=2048,
+                    temperature=0.2
+                )
+                
+                if not response or not response.choices:
+                    raise ValueError("OpenAI API returned an empty response")
+                
+                answer = response.choices[0].message.content
+                if not answer:
+                    raise ValueError("OpenAI API returned empty content in response")
+                
+                return answer.strip()
+            except Exception as e:
+                error_type = type(e).__name__
+                raise RuntimeError(f"OpenAI API error ({error_type}): {str(e)}") from e
+        
+        answer = await ctx.step.run("llm-answer", lambda: _call_openai(user_content))
+        
+        return {
+            "answer": answer,
+            "sources": search_result.sources[:10],
+            "products_found": len(search_result.products),
+            "num_contexts": len(search_result.contexts)
+        }
+    
+    return query_products_function
