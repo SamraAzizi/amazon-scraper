@@ -153,3 +153,210 @@ async def send_query_event(question: str, top_k: int = 10):
                 },
             )
         )
+        return result[0] if result else None
+    except Exception as e:
+        import traceback
+        raise RuntimeError(f"Failed to send query event: {str(e)}\n{traceback.format_exc()}") from e
+
+if prompt := st.chat_input("Ask about products, prices, trends, etc."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    
+    with st.chat_message("assistant"):
+        try:
+            with st.spinner("Searching products and generating answer..."):
+                try:
+                    event_id = run_async(send_query_event(prompt.strip(), top_k=10))
+                except Exception as e:
+                    st.error(f"Failed to send event: {str(e)}")
+                    st.session_state.messages.append({"role": "assistant", "content": f"Error: Failed to send query. {str(e)}"})
+                    st.stop()
+                
+                if not event_id:
+                    st.error("Failed to send query to Inngest - no event ID returned")
+                    st.session_state.messages.append({"role": "assistant", "content": "Error: Failed to send query to Inngest"})
+                    st.stop()
+                
+                try:
+                    output = wait_for_run_output(event_id, timeout_s=120.0)
+                except TimeoutError as e:
+                    st.error(f"Query timed out after 120 seconds. Event ID: {event_id}")
+                    st.session_state.messages.append({"role": "assistant", "content": f"Error: Query timed out. Event ID: {event_id}"})
+                    st.stop()
+                except Exception as e:
+                    st.error(f"Error waiting for response: {str(e)}")
+                    st.session_state.messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
+                    st.stop()
+                
+                if not output:
+                    st.error("No output received from Inngest function")
+                    st.session_state.messages.append({"role": "assistant", "content": "Error: No output received from query function"})
+                    st.stop()
+                
+                answer = output.get("answer", "I couldn't generate a response.")
+                sources = output.get("sources", [])
+                products_found = output.get("products_found", 0)
+                
+                st.markdown(answer)
+                
+                if sources:
+                    with st.expander(f"Sources ({products_found} products found)"):
+                        for source in sources[:10]:
+                            st.write(f"- {source}")
+                
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+        except Exception as e:
+            import traceback
+            error_msg = f"Error: {str(e)}\n\nFull error: {traceback.format_exc()}"
+            st.error(error_msg)
+            st.session_state.messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
+
+st.divider()
+
+tab1, tab2 = st.tabs(["All Products", "Price Comparison"])
+
+with tab1:
+    st.subheader("Database Products")
+    
+    db = SyncDatabase()
+    products = db.get_all_products()
+    
+    if products:
+        st.write(f"Total products in database: {len(products)}")
+        
+        items_per_page = 10
+        total_pages = (len(products) + items_per_page - 1) // items_per_page
+        
+        if total_pages > 1:
+            page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, key="products_page") - 1
+        else:
+            page = 0
+        
+        start_idx = page * items_per_page
+        end_idx = min(start_idx + items_per_page, len(products))
+        
+        for p in products[start_idx:end_idx]:
+            with st.container(border=True):
+                cols = st.columns([1, 3])
+                if p.get("images"):
+                    try:
+                        img_url = p["images"][0] if isinstance(p["images"], list) and len(p["images"]) > 0 else p["images"]
+                        if isinstance(img_url, str) and img_url.startswith(("http://", "https://")):
+                            cols[0].image(img_url, width=150, use_container_width=False)
+                        else:
+                            cols[0].write("No image")
+                    except Exception as e:
+                        cols[0].write("Image unavailable")
+                
+                with cols[1]:
+                    st.write(f"**{p.get('title', p.get('asin'))}**")
+                    st.write(f"ASIN: {p.get('asin')}")
+                    if p.get("price_display"):
+                        st.write(f"Price: {p.get('price_display')}")
+                    elif p.get("price") is not None:
+                        currency_symbol = p.get("currency_symbol", p.get("currency", ""))
+                        st.write(f"Price: {currency_symbol}{p.get('price')}")
+                    if p.get("rating"):
+                        st.write(f"Rating: {p.get('rating')}")
+                    if p.get("brand"):
+                        st.write(f"Brand: {p.get('brand')}")
+                    if p.get("scraped_url") or p.get("url"):
+                        scraped_url = p.get("scraped_url") or p.get("url")
+                        st.write(f"[View Product on Amazon]({scraped_url})")
+                    if p.get("scraped_at"):
+                        st.caption(f"Scraped: {p.get('scraped_at')}")
+                    st.caption(f"Domain: amazon.{p.get('amazon_domain', 'com')} | Location: {p.get('geo_location', '-')}")
+    else:
+        st.info("No products in database yet. Scrape a product to get started.")
+
+with tab2:
+    st.subheader("Price Comparison by ASIN")
+    
+    db = SyncDatabase()
+    grouped_products = db.get_products_grouped_by_asin()
+    
+    if grouped_products:
+        asins_with_multiple = {asin: products for asin, products in grouped_products.items() if len(products) > 1}
+        
+        if asins_with_multiple:
+            st.write(f"Found {len(asins_with_multiple)} products with multiple country listings")
+            
+            selected_asin = st.selectbox(
+                "Select ASIN to compare",
+                options=list(asins_with_multiple.keys()),
+                format_func=lambda x: f"{x} ({len(asins_with_multiple[x])} countries)"
+            )
+            
+            if selected_asin:
+                products = asins_with_multiple[selected_asin]
+                
+                st.write(f"**{products[0].get('title', selected_asin)}**")
+                st.write(f"ASIN: {selected_asin}")
+                
+                if products[0].get("images"):
+                    try:
+                        img_url = products[0]["images"][0] if isinstance(products[0]["images"], list) and len(products[0]["images"]) > 0 else products[0]["images"]
+                        if isinstance(img_url, str) and img_url.startswith(("http://", "https://")):
+                            st.image(img_url, width=300)
+                    except:
+                        pass
+                
+                st.divider()
+                
+                comparison_data = []
+                for p in products:
+                    comparison_data.append({
+                        "Country": p.get("geo_location", "Unknown"),
+                        "Domain": f"amazon.{p.get('amazon_domain', 'com')}",
+                        "Price": p.get("price_display", f"{p.get('currency_symbol', p.get('currency', ''))}{p.get('price', 'N/A')}") if (p.get("price_display") or p.get("price") is not None) else "N/A",
+                        "Currency": p.get("currency", ""),
+                        "Price Value": p.get("price"),
+                        "Rating": p.get("rating", "N/A"),
+                        "Stock": p.get("stock", "Unknown"),
+                        "Scraped": str(p.get("scraped_at", "Unknown"))[:10] if p.get("scraped_at") else "Unknown",
+                        "URL": p.get("scraped_url") or p.get("url", "")
+                    })
+                
+                df = pd.DataFrame(comparison_data)
+                df = df.sort_values("Price Value", na_position="last")
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                st.subheader("Price Chart")
+                price_df = df[df["Price Value"].notna()].copy()
+                if not price_df.empty:
+                    price_df = price_df.sort_values("Price Value")
+                    st.bar_chart(price_df.set_index("Country")["Price Value"])
+                
+                st.subheader("Individual Listings")
+                for p in products:
+                    with st.container(border=True):
+                        cols = st.columns([1, 2])
+                        if p.get("images"):
+                            try:
+                                img_url = p["images"][0] if isinstance(p["images"], list) and len(p["images"]) > 0 else p["images"]
+                                if isinstance(img_url, str) and img_url.startswith(("http://", "https://")):
+                                    cols[0].image(img_url, width=150)
+                            except:
+                                cols[0].write("No image")
+                        
+                        with cols[1]:
+                            st.write(f"**{p.get('geo_location', 'Unknown')} - amazon.{p.get('amazon_domain', 'com')}**")
+                            if p.get("price_display"):
+                                st.metric("Price", p.get("price_display"))
+                            elif p.get("price") is not None:
+                                currency_symbol = p.get("currency_symbol", p.get("currency", ""))
+                                st.metric("Price", f"{currency_symbol}{p.get('price')}")
+                            if p.get("rating"):
+                                st.write(f"Rating: {p.get('rating')}")
+                            if p.get("stock"):
+                                st.write(f"Stock: {p.get('stock')}")
+                            if p.get("scraped_url") or p.get("url"):
+                                scraped_url = p.get("scraped_url") or p.get("url")
+                                st.write(f"[View on Amazon]({scraped_url})")
+                            if p.get("scraped_at"):
+                                st.caption(f"Scraped: {p.get('scraped_at')}")
+        else:
+            st.info("No products with multiple country listings found. Scrape the same ASIN in different countries to see price comparisons.")
+    else:
+        st.info("No products in database yet. Scrape a product to get started.")
